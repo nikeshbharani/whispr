@@ -203,7 +203,15 @@ to the target device and run it — no Rust required.
 | `whispr-linux-x86_64` | Linux, x86-64 | static (musl), runs on any distro |
 | `whispr-linux-arm64` | Linux, ARM64 | static (musl); servers, Raspberry Pi |
 | `whispr-windows-x86_64.exe` | Windows, x86-64 | run from PowerShell/cmd |
+| `whispr-windows-arm64.exe` | Windows on ARM (Snapdragon laptops, Surface Pro X) | run from PowerShell/cmd |
 | `whispr-android-arm64` | Android, ARM64 | run inside Termux: `chmod +x`, then `./whispr-android-arm64` |
+
+> **Where are the macOS binaries?** Apple only lets you build macOS binaries
+> on a Mac, and the maintainer currently doesn't own one (donations of spare
+> MacBooks will be accepted with suspicious enthusiasm). Until then, Mac users
+> get the full artisanal experience: install Rust and run
+> `cargo install --path .` — it takes about a minute and you get to feel like a
+> compiler engineer. If you build them, a PR or release upload is very welcome.
 
 #### Running the macOS binaries
 
@@ -262,8 +270,8 @@ The manual steps above are bundled into a reproducible script:
 ```
 
 Platforms: `linux-x86_64`, `linux-arm64`, `android-arm64`, `windows-x86_64`,
-`macos-arm64`, `macos-x86_64` (macOS targets need a macOS host). Groups:
-`linux`, `android`, `windows`, `macos`, `all`.
+`windows-arm64`, `macos-arm64`, `macos-x86_64` (macOS targets need a macOS
+host). Groups: `linux`, `android`, `windows`, `macos`, `all`.
 
 It runs on a **Linux** or **macOS** host and only sets up the toolchains for the
 platforms you select. On Linux (e.g. Arch) it needs:
@@ -275,8 +283,9 @@ sudo pacman -S mingw-w64-gcc    # for windows-x86_64
 ```
 
 Cross toolchains are installed to a **persistent** location and reused — the
-Android NDK in `~/android-ndk-r26d` (downloaded automatically), and on macOS the
-musl toolchains in `~/cross-toolchains` and mingw-w64 via Homebrew. The large
+Android NDK in `~/android-ndk-r26d` and llvm-mingw (for `windows-arm64`, ~80 MB)
+in `~/cross-toolchains`, both downloaded automatically; on macOS also the musl
+toolchains in `~/cross-toolchains` and mingw-w64 via Homebrew. The large
 downloads happen **at most once**; re-running after a bug fix only recompiles
 (nothing is re-downloaded). Override the locations with `WHISPR_CROSS_DIR` /
 `ANDROID_NDK_HOME` if you prefer.

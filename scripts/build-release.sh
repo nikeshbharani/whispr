@@ -9,16 +9,16 @@
 # Usage:
 #   scripts/build-release.sh                       # interactive menu
 #   scripts/build-release.sh linux android         # pick platforms / groups
-#   scripts/build-release.sh linux-x86_64 windows-x86_64
+#   scripts/build-release.sh linux-x86_64 windows-arm64
 #   scripts/build-release.sh all                   # everything this host can build
 #   scripts/build-release.sh --list                # show platforms
 #
 # Platforms:  linux-x86_64  linux-arm64  android-arm64  windows-x86_64
-#             macos-arm64   macos-x86_64            (macOS host only)
+#             windows-arm64 macos-arm64   macos-x86_64  (macos-*: macOS host only)
 # Groups:     linux  android  windows  macos  all
 #
 # Env overrides:
-#   WHISPR_CROSS_DIR   musl cross toolchains (macOS host)  default ~/cross-toolchains
+#   WHISPR_CROSS_DIR   cross toolchains (llvm-mingw; musl on macOS)  default ~/cross-toolchains
 #   ANDROID_NDK_HOME   Android NDK                         default ~/android-ndk-r26d
 #   SKIP_ANDROID=1     drop android from the selection
 
@@ -29,7 +29,7 @@ cd "$PROJECT_DIR"
 source "$HOME/.cargo/env" 2>/dev/null || true
 
 HOST_OS="$(uname -s)"   # Linux | Darwin
-ALL_PLATFORMS=(linux-x86_64 linux-arm64 android-arm64 windows-x86_64 macos-arm64 macos-x86_64)
+ALL_PLATFORMS=(linux-x86_64 linux-arm64 android-arm64 windows-x86_64 windows-arm64 macos-arm64 macos-x86_64)
 
 log()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m!!  %s\033[0m\n' "$*" >&2; }
@@ -50,9 +50,9 @@ expand() { # <platform-or-group> -> platforms
     all)     for p in "${ALL_PLATFORMS[@]}"; do host_can_build "$p" && echo "$p"; done ;;
     linux)   echo linux-x86_64; echo linux-arm64 ;;
     android) echo android-arm64 ;;
-    windows) echo windows-x86_64 ;;
+    windows) echo windows-x86_64; echo windows-arm64 ;;
     macos)   echo macos-arm64; echo macos-x86_64 ;;
-    linux-x86_64|linux-arm64|android-arm64|windows-x86_64|macos-arm64|macos-x86_64) echo "$1" ;;
+    linux-x86_64|linux-arm64|android-arm64|windows-x86_64|windows-arm64|macos-arm64|macos-x86_64) echo "$1" ;;
     *) die "Unknown platform '$1' (see --list)" ;;
   esac
 }
@@ -120,6 +120,7 @@ target_of() {
     linux-arm64)    echo aarch64-unknown-linux-musl ;;
     android-arm64)  echo aarch64-linux-android ;;
     windows-x86_64) echo x86_64-pc-windows-gnu ;;
+    windows-arm64)  echo aarch64-pc-windows-gnullvm ;;
     macos-arm64)    echo aarch64-apple-darwin ;;
     macos-x86_64)   echo x86_64-apple-darwin ;;
   esac
@@ -127,22 +128,65 @@ target_of() {
 log "Ensuring Rust targets"
 for p in "${PLATFORMS[@]}"; do rustup target add "$(target_of "$p")" >/dev/null; done
 
-need_cmd() { # <command> <how to install>
-  command -v "$1" >/dev/null || die "'$1' not found. Install it with: $2"
+# Ensure a system command exists. If it's missing and we're on an Arch-based
+# system in an interactive terminal, offer to install its package with pacman
+# (this needs sudo, so we always ask first). Otherwise print how to install it.
+need_cmd() { # <command> <pacman package>
+  local cmd="$1" pkg="$2"
+  command -v "$cmd" >/dev/null && return 0
+  if command -v pacman >/dev/null && [ -t 0 ]; then
+    printf "\n'%s' is missing. Install it now with 'sudo pacman -S --needed %s'? [Y/n] " "$cmd" "$pkg" >&2
+    local reply; read -r reply
+    if [[ -z "$reply" || "$reply" =~ ^[Yy] ]]; then
+      sudo pacman -S --needed "$pkg"
+      command -v "$cmd" >/dev/null && return 0
+      die "'$cmd' still not found after installing $pkg"
+    fi
+  fi
+  if command -v pacman >/dev/null; then
+    die "'$cmd' not found. Install it with: sudo pacman -S --needed $pkg"
+  fi
+  die "'$cmd' not found. Install the package that provides it (Arch: $pkg) with your package manager"
 }
 
 # --- Per-host toolchain setup (only for what was selected) ------------------
 LINUX_BUILDER="cargo build"   # how Linux musl targets are built on this host
+# Windows on ARM: GNU mingw can't target it, so use llvm-mingw (an LLVM-based
+# mingw toolchain that ships the libunwind Rust needs). Downloaded once (~80 MB).
+CROSS_DIR="${WHISPR_CROSS_DIR:-$HOME/cross-toolchains}"
+if want windows-arm64; then
+  LLVM_MINGW_VERSION="20261117"
+  case "$HOST_OS-$(uname -m)" in
+    Linux-x86_64)  LLVM_MINGW_HOST="ubuntu-22.04-x86_64" ;;
+    Linux-aarch64) LLVM_MINGW_HOST="ubuntu-22.04-aarch64" ;;
+    Darwin-*)      LLVM_MINGW_HOST="macos-universal" ;;
+    *) die "windows-arm64: no llvm-mingw build for $HOST_OS-$(uname -m)" ;;
+  esac
+  LLVM_MINGW_NAME="llvm-mingw-$LLVM_MINGW_VERSION-ucrt-$LLVM_MINGW_HOST"
+  LLVM_MINGW_DIR="$CROSS_DIR/$LLVM_MINGW_NAME"
+  if [ ! -x "$LLVM_MINGW_DIR/bin/aarch64-w64-mingw32-clang" ]; then
+    log "Installing llvm-mingw $LLVM_MINGW_VERSION (one-time, ~80 MB) -> $LLVM_MINGW_DIR"
+    mkdir -p "$CROSS_DIR"
+    curl -fL -o "$CROSS_DIR/$LLVM_MINGW_NAME.tar.xz" \
+      "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_VERSION/$LLVM_MINGW_NAME.tar.xz"
+    tar xJf "$CROSS_DIR/$LLVM_MINGW_NAME.tar.xz" -C "$CROSS_DIR"
+    rm -f "$CROSS_DIR/$LLVM_MINGW_NAME.tar.xz"
+  fi
+  # Point at the linker by absolute path. Do NOT prepend llvm-mingw to PATH: it
+  # also ships an `x86_64-w64-mingw32-gcc` (really clang, without libgcc) that
+  # would shadow the real mingw-w64 GCC and break the windows-x86_64 build.
+  export CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER="$LLVM_MINGW_DIR/bin/aarch64-w64-mingw32-clang"
+fi
 if [ "$HOST_OS" = "Linux" ]; then
   if want linux-x86_64 || want linux-arm64; then
     # zig is a self-contained cross C toolchain; cargo-zigbuild wires it up and
     # overrides the macOS-only linker names in .cargo/config.toml.
-    need_cmd zig "sudo pacman -S zig"
+    need_cmd zig zig
     command -v cargo-zigbuild >/dev/null || { log "Installing cargo-zigbuild"; cargo install cargo-zigbuild; }
     LINUX_BUILDER="cargo zigbuild"
   fi
   if want windows-x86_64; then
-    need_cmd x86_64-w64-mingw32-gcc "sudo pacman -S mingw-w64-gcc"
+    need_cmd x86_64-w64-mingw32-gcc mingw-w64-gcc
   fi
   NDK_HOST_TAG="linux"
 else # Darwin
@@ -151,7 +195,6 @@ else # Darwin
     brew install mingw-w64
   fi
   if want linux-x86_64 || want linux-arm64; then
-    CROSS_DIR="${WHISPR_CROSS_DIR:-$HOME/cross-toolchains}"
     MUSL_BASE="https://github.com/messense/homebrew-macos-cross-toolchains/releases/download/v15.2.0"
     MUSL_HOST="$( [ "$(uname -m)" = arm64 ] && echo aarch64-darwin || echo x86_64-darwin )"
     for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
@@ -198,6 +241,7 @@ build() { # <builder> <rust-target> <dist-name> <src-bin-name>
 want macos-arm64    && build "cargo build"    aarch64-apple-darwin       whispr-macos-arm64        whispr
 want macos-x86_64   && build "cargo build"    x86_64-apple-darwin        whispr-macos-x86_64       whispr
 want windows-x86_64 && build "cargo build"    x86_64-pc-windows-gnu      whispr-windows-x86_64.exe whispr.exe
+want windows-arm64  && build "cargo build"    aarch64-pc-windows-gnullvm whispr-windows-arm64.exe  whispr.exe
 want linux-x86_64   && build "$LINUX_BUILDER" x86_64-unknown-linux-musl  whispr-linux-x86_64       whispr
 want linux-arm64    && build "$LINUX_BUILDER" aarch64-unknown-linux-musl whispr-linux-arm64        whispr
 
@@ -222,7 +266,7 @@ if want android-arm64; then
   if [ ! -d "$NDK_DIR/toolchains/llvm/prebuilt" ]; then
     log "Installing Android NDK $NDK_VERSION (one-time, large download) -> $NDK_DIR"
     if [ "$NDK_HOST_TAG" = "linux" ]; then
-      need_cmd unzip "sudo pacman -S unzip"
+      need_cmd unzip unzip
       tmp_zip="$(mktemp --suffix=.zip)"
       tmp_dir="$(mktemp -d)"
       curl -fL -o "$tmp_zip" "https://dl.google.com/android/repository/android-ndk-$NDK_VERSION-linux.zip"
