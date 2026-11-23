@@ -1,0 +1,40 @@
+[package]
+name = "whispr"
+version = "0.1.0"
+edition = "2021"
+description = "Serverless, end-to-end encrypted, anonymous peer-to-peer messenger with LAN, Internet (Tor/proxy) and Bluetooth transports. Works as an interactive TUI and a scriptable CLI."
+license = "MIT"
+readme = "README.md"
+
+[features]
+default = []
+# Optional, experimental Bluetooth Low Energy transport (native BLE stack).
+bluetooth = ["dep:btleplug"]
+
+[dependencies]
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1"
+clap = { version = "4.5", features = ["derive"] }
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+snow = "0.9"
+mdns-sd = "0.12"
+tokio-socks = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+directories = "5"
+rand = "0.8"
+bs58 = "0.5"
+sha2 = "0.10"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+btleplug = { version = "0.11", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.40", features = ["full", "test-util"] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
